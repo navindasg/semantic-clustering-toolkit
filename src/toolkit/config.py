@@ -204,7 +204,7 @@ def load_config(
         file_path = Path(path)
         if not file_path.exists():
             raise FileNotFoundError(f"config file not found: {file_path}")
-        loaded = yaml.safe_load(file_path.read_text()) or {}
+        loaded = yaml.safe_load(file_path.read_text(encoding="utf-8")) or {}
         if not isinstance(loaded, dict):
             raise ValueError(f"config file {file_path} must contain a mapping")
         data.update(loaded)

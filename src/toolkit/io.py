@@ -62,7 +62,7 @@ def iter_records(path: Path, columns: ColumnMap | None = None) -> Iterator[Label
     columns = columns or ColumnMap()
     suffix = path.suffix.lower()
     if suffix in {".jsonl", ".ndjson"}:
-        with path.open() as handle:
+        with path.open(encoding="utf-8-sig") as handle:
             for line_no, line in enumerate(handle, start=1):
                 if not line.strip():
                     continue
@@ -74,7 +74,7 @@ def iter_records(path: Path, columns: ColumnMap | None = None) -> Iterator[Label
                     raise InputError(f"{path}:{line_no}: expected a JSON object")
                 yield _to_item(record, columns, f"{path}:{line_no}")
     elif suffix in {".csv", ".tsv"}:
-        with path.open(newline="") as handle:
+        with path.open(newline="", encoding="utf-8-sig") as handle:
             reader = csv.DictReader(handle, delimiter="\t" if suffix == ".tsv" else ",")
             for line_no, record in enumerate(reader, start=2):
                 yield _to_item(record, columns, f"{path}:{line_no}")

@@ -137,7 +137,7 @@ def test_demo_run_and_report(tmp_path, data_file, config_file):
     assert "cluster.opened" in out and "done in" in out
     report = tmp_path / "report.html"
     out = run(db, config_file, "demo", "report", "--out", str(report))
-    html = report.read_text()
+    html = report.read_text(encoding="utf-8")
     assert "Cluster report" in html and "Scoring against ground truth" in html
     assert "plotly" in html.lower() and "Sampled items per cluster" in html
 

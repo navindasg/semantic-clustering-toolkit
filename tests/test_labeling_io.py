@@ -125,3 +125,10 @@ def test_input_errors(tmp_path, name, content):
 def test_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         read_items(tmp_path / "nope.csv")
+
+
+def test_read_utf8_with_bom(tmp_path):
+    path = tmp_path / "excel.csv"
+    path.write_bytes("id,text,timestamp\n1,café crème brûlée,2026-01-01\n".encode("utf-8-sig"))
+    [row] = read_items(path)
+    assert row.item.id == "1" and row.item.text == "café crème brûlée"

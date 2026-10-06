@@ -118,4 +118,4 @@ def test_sample_dataset_is_bundled_and_deterministic(tmp_path):
     assert rows == sorted(rows, key=lambda r: r.item.timestamp) or True
     regenerated = tmp_path / "s.csv"
     write_csv(generate(), regenerated)
-    assert regenerated.read_text() == sample_path().read_text()
+    assert regenerated.read_text(encoding="utf-8") == sample_path().read_text(encoding="utf-8")

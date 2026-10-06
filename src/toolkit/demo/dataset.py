@@ -85,7 +85,7 @@ def generate(seed: int = 7) -> list[Row]:
 
 def write_csv(rows: list[Row], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
+    with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["id", "text", "timestamp", "label"])
         for row in rows:
