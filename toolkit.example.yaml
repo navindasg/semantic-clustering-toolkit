@@ -1,0 +1,63 @@
+# Every setting, with its default. Copy to toolkit.yaml and pass --config toolkit.yaml.
+# TOOLKIT_<NAME> environment variables override this file; CLI flags override both.
+
+embedder: fastembed:BAAI/bge-small-en-v1.5   # or model2vec:minishlab/potion-base-8M, sentence-transformers:...
+model_dir: null                    # local model directory for offline machines
+embed_batch_size: 64
+
+# Matching. threshold_bounds / merge_threshold come from the embedder's calibrated profile
+# when left unset (bge-small: [0.75, 0.92] / 0.86); uncomment to override.
+exemplars_per_cluster: 32
+match_top_k: 5
+threshold_percentile: 5
+# threshold_bounds: [0.55, 0.90]
+# merge_threshold: 0.85
+exemplar_index: numpy              # or "store" to use pgvector HNSW with the Postgres store
+exemplar_neighbors: 200
+
+# Discovery
+discovery_interval: 1h
+discovery_min_buffer: 200
+discovery_sample_size: 50000
+min_cluster_size: 10
+min_samples: 5
+umap_components: 5
+umap_neighbors: 15
+random_seed: 42
+
+# Lifecycle
+close_after: 7d
+keep_open_min_items: 1
+reopen_grace: null                 # null = 2 x close_after
+buffer_max_age: 7d
+sweep_interval: 5m
+
+# Labels
+labeler: ctfidf                    # or "llm" / "llm:<model>" (toolkit[llm], ANTHROPIC_API_KEY)
+label_terms: 5
+relabel_growth: 1.5
+
+# Storage
+store: sqlite:///toolkit.db        # memory://, sqlite:///path.db, postgresql://user:pass@host/db
+
+# Input files
+columns:
+  id: id
+  text: text
+  timestamp: timestamp
+  label: label                     # optional ground truth for eval / demo scoring
+
+# Preprocessing before embedding (the processed text is what gets stored)
+preprocess:
+  normalize: false
+  redact_pii: false
+  max_chars: null
+
+# Webhooks receive every event (or only event_types), signed with HMAC-SHA256 when
+# secret_env names an environment variable holding the secret.
+webhooks: []
+#  - url: https://example.com/hooks/clusters
+#    secret_env: TOOLKIT_WEBHOOK_SECRET
+#    event_types: [cluster.opened, cluster.closed, cluster.reopened, cluster.merged]
+#    max_retries: 5
+#    timeout_seconds: 5
