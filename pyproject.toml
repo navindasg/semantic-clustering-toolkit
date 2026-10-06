@@ -1,0 +1,65 @@
+[project]
+name = "semantic-clustering-toolkit"
+version = "0.1.0"
+description = "Stable, incremental semantic clustering for streams of short text, with a cluster lifecycle."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Navin Dasgupta" }]
+dependencies = [
+    "numpy>=1.26",
+    "scikit-learn>=1.3",
+    "umap-learn>=0.5.5",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "httpx>=0.27",
+    "fastembed>=0.4",
+]
+
+[project.optional-dependencies]
+light = ["model2vec>=0.3"]
+torch = ["sentence-transformers>=3.0"]
+postgres = ["psycopg[binary]>=3.1", "pgvector>=0.3"]
+service = ["fastapi>=0.110", "uvicorn>=0.29"]
+llm = ["anthropic>=0.40"]
+demo = ["plotly>=5.20"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "semantic-clustering-toolkit[light,postgres,service,demo]",
+]
+
+[project.scripts]
+toolkit = "toolkit.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/toolkit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "postgres: needs TOOLKIT_TEST_POSTGRES_URL pointing at a Postgres with pgvector",
+    "model: downloads a real embedding model",
+]
+
+[tool.coverage.run]
+source = ["toolkit"]
+omit = ["src/toolkit/embedders/sentence_transformers.py"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/toolkit/demo/report.py" = ["E501"]  # inline CSS and HTML templates
+"src/toolkit/service.py" = ["B008"]  # FastAPI's Query()/Depends() defaults are idiomatic

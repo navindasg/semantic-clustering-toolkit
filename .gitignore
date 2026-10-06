@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.scratch/
+*.db
+*.db-wal
+*.db-shm
+report.html
+dist/
+.playwright-mcp/

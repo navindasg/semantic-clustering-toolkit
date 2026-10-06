@@ -1,0 +1,401 @@
+PRD: Semantic Clustering Toolkit
+Oct 5, 2026 · @Navin Dasgupta
+Summary
+The toolkit groups a stream of short text items into semantic clusters. Each cluster stays open while new items keep arriving and closes after a configurable quiet period. It runs end to end on a CPU/RAM-only laptop in demo mode, and moves to production by swapping storage and scheduling adapters, not by rewriting the core.
+It is domain-agnostic. Each item is just text, a timestamp, an ID and optional metadata, so the same engine fits complaints, support tickets, feedback, alerts or any similar stream. "toolkit" is a placeholder name throughout.
+Problem
+Teams need to know when many people are reporting the same thing, and when that thing has gone quiet. One-off batch clustering (embed, then HDBSCAN) tells you what topics exist in a fixed dataset, but it breaks on a live stream in three ways:
+• Cluster IDs change on every run, so nothing downstream can track a cluster over time.
+• A new item can't join an existing cluster without refitting everything.
+• There is no notion of a cluster being active, quiet or resolved.
+The toolkit keeps batch clustering for discovering new topics and adds a stable, incremental layer for assignment and lifecycle on top of it.
+Goals and non-goals
+v1 succeeds if an integrator can point a stream at the toolkit and get stable, trackable clusters with a lifecycle, on a laptop, in an afternoon.
+Goals
+• Assign each incoming item to an existing cluster, or hold it for discovery, in a single call.
+• Discover new clusters from unassigned items without disturbing existing ones.
+• Track each cluster's lifecycle: open, close on inactivity, reopen within a grace window, merge duplicates.
+• Return a representative sample of any cluster for review or labeling.
+• Run fully locally on a CPU-only laptop, with no PyTorch in the default install.
+• Scale to production by swapping adapters, with the same engine and config.
+Non-goals for v1
+• Training or fine-tuning embedding models.
+• A ticketing or case-management UI. The toolkit emits events; other systems own the workflow.
+• Multi-label assignment. Each item belongs to at most one cluster.
+• Streaming transport (queues, brokers). Callers bring their own and hand the toolkit batches.
+• Root-cause analysis or suggested resolutions.
+Users
+Three kinds of people touch the toolkit, and the integrator is the primary one for v1.
+User
+What they need
+Main interface
+Integrator (developer wiring it into a pipeline)
+A small API, pluggable models and storage, events to hook into
+Python library, config file
+Operator (analyst or team lead watching clusters)
+What's open, how big, what it's about; a way to fix mistakes
+CLI, demo report, override API
+Evaluator (person tuning or judging quality)
+Replay labeled data and see the numbers
+Demo mode, evaluation harness
+Core concepts
+All cluster state lives in raw embedding space, so it stays valid no matter how often discovery reruns.
+Term
+What it is
+Item
+One text record: ID, text, event timestamp, optional metadata. Immutable once ingested.
+Embedding
+A fixed-length vector for an item, tagged with the ID of the model that made it.
+Cluster
+A group of items about the same thing, with a permanent ID, status, counts, first and last seen times, and a label.
+Exemplars
+A fixed-size sample of a cluster's embeddings (default 32) used to match new items. Refreshed by reservoir sampling as the cluster grows.
+Threshold
+The similarity a new item must reach to join a cluster. Set per cluster from its own spread at discovery time.
+Buffer
+Items that matched no cluster, waiting for the next discovery run.
+Orphan
+A buffered item that aged out without ever forming a cluster.
+A cluster moves through four states:
+Only open and recently closed clusters are matched against new items. Archived and merged clusters stay in the store for history and reporting.
+How it works
+The engine runs three jobs that share one store: assignment on every batch, discovery on a schedule, and a sweep on a schedule.
+The dashed line is all the hot path reads from the store: each cluster's exemplars and threshold. A match writes back only the item, the cluster's count and its last-seen time.
+1. Assign (every batch). Embed the items, then score each one against the exemplars of open clusters and of closed clusters still inside the grace window. The score is the mean cosine similarity of the top-k closest exemplars. If the best score clears that cluster's threshold, the item joins it and last_seen updates. Otherwise it goes to the buffer.
+2. Discover (hourly, or when the buffer fills). Snapshot the buffer, reduce it with UMAP, and cluster it with HDBSCAN. Each candidate cluster is first checked against existing open clusters and folded in if it overlaps. The rest become new open clusters with a permanent ID, sampled exemplars and their own threshold. Noise stays in the buffer, and items that arrived during the run are re-assigned afterward.
+3. Sweep (every few minutes). Close open clusters that have been quiet for close_after, archive closed clusters past reopen_grace, run the merge check, and turn buffered items older than buffer_max_age into orphans.
+UMAP only exists inside discovery. Matching always happens in raw embedding space, which is what keeps cluster IDs stable when discovery reruns.
+Functional requirements
+P0 (19 items) is everything demo mode needs, P1 (10) makes it production-ready, and P2 (1) is optional.
+ID
+Requirement
+Priority
+ING-1
+Accept item batches through the Python API and the CLI (CSV or JSONL).
+P0
+ING-2
+Re-ingesting an item ID is a no-op.
+P0
+ING-3
+Accept the same batches over an optional HTTP endpoint.
+P1
+ING-4
+Optional preprocessing hook before embedding: normalization, PII redaction, truncation.
+P1
+EMB-1
+One embedder interface, with model2vec, fastembed and sentence-transformers backends.
+P0
+EMB-2
+Load models from a local directory for offline or locked-down machines.
+P0
+EMB-3
+Store the model ID with every vector, refuse to mix models, and ship a re-embed migration command.
+P1
+ASN-1
+Score items against exemplars of open clusters and of closed clusters inside the grace window (mean of top-k cosine).
+P0
+ASN-2
+Attach the item when its best score clears that cluster's threshold; otherwise buffer it.
+P0
+ASN-3
+Return a result per item: cluster ID or buffered, best score, runner-up cluster and its score.
+P0
+ASN-4
+Refresh exemplars by reservoir sampling, keeping each set a fixed size.
+P1
+DSC-1
+Cluster a snapshot of the buffer only (UMAP, then HDBSCAN); never re-cluster history.
+P0
+DSC-2
+Trigger discovery on a schedule or when the buffer reaches a set size, whichever comes first.
+P0
+DSC-3
+Give each new cluster a permanent ID, sampled exemplars, and a threshold from its own member-to-exemplar similarity, clamped to global bounds.
+P0
+DSC-4
+Fold a candidate into an existing open cluster when they overlap, instead of creating a duplicate.
+P0
+DSC-5
+Re-assign items that reached the buffer while discovery was running.
+P1
+LC-1
+Close open clusters with no new items for close_after.
+P0
+LC-2
+Reopen a closed cluster on a match inside reopen_grace; archive it once the window passes.
+P0
+LC-3
+Merge open clusters whose exemplars converge past merge_threshold; the absorbed one points to the survivor.
+P1
+LC-4
+Turn buffered items older than buffer_max_age into orphans.
+P1
+LC-5
+Drive every lifecycle decision from a clock interface using event time, so replay and live runs behave the same.
+P0
+SMP-1
+sample(cluster_id, n, strategy) returns representative items: central, random, recent or mixed.
+P0
+SMP-2
+Label every cluster with its top c-TF-IDF terms by default.
+P0
+SMP-3
+Optional LLM labeler writes a one-line title from sampled items and relabels after set growth.
+P2
+INT-1
+Emit lifecycle events (cluster.opened, item.assigned, cluster.closed, cluster.reopened, cluster.merged, item.orphaned) to in-process callbacks.
+P0
+INT-2
+Deliver the same events to webhooks, with retries.
+P1
+INT-3
+List clusters by status and fetch one cluster's detail, including counts over time.
+P0
+INT-4
+Operator overrides: move an item, merge or split clusters, close or reopen by hand. Automation never undoes an override.
+P1
+STO-1
+Store interface with a SQLite adapter.
+P0
+STO-2
+Postgres + pgvector adapter.
+P1
+Demo mode
+Demo mode runs the full engine on one laptop: a SQLite file, an in-process scheduler, a simulated clock and a bundled dataset. One command replays a stream fast enough to watch clusters open, grow and close in a few minutes.
+• Sample dataset. Synthetic short-text items with timestamps and hidden ground-truth topic labels. Topics arrive in bursts and then go quiet, so every lifecycle state shows up.
+• Bring your own data. Any CSV or JSONL with a text column and a timestamp column; column names are configurable.
+• Simulated clock. Replays items in event-time order at a chosen speed. Discovery and sweeps fire on simulated time, so a week of data plays out in minutes.
+• Live event log. The terminal prints each open, close, reopen and merge as it happens.
+• Report. One static HTML file: a cluster table (status, size, label, first and last seen), a timeline of when each cluster was open, a 2D map of items colored by cluster, and sampled items per cluster.
+• Scoring. When the data carries ground-truth labels, the report adds the metrics from Success metrics.
+uv pip install "toolkit[demo]"
+toolkit demo run --data sample --speed 3600 --close-after 2d   # 1 simulated hour per second
+toolkit demo report --out report.html
+Demo mode uses the same engine as production; only the store, scheduler, clock and event sink adapters change. No data leaves the machine after the model download, and no LLM is called unless one is configured.
+Architecture and default stack
+The engine is pure Python with no I/O of its own. Everything that touches the outside world sits behind an adapter interface, which is how demo and production share one engine.
+Component
+Job
+Demo adapter
+Production adapter
+Engine
+Assign, discover, sweep, merge, sample
+Same
+Same
+Embedder
+Text to vectors
+fastembed, in process
+fastembed in a batched worker pool; sentence-transformers on GPU optional
+Store
+Items, clusters, exemplars, events
+SQLite file
+Postgres
+Exemplar index
+Nearest-exemplar lookup
+NumPy brute force in memory
+pgvector HNSW index
+Scheduler
+Runs discovery and sweeps
+In-process loop
+Cron or a worker queue
+Clock
+Time for lifecycle decisions
+Simulated replay clock
+System clock with event time
+Event sink
+Delivers lifecycle events
+Terminal log and callbacks
+Webhooks or a message queue
+Labeler
+Cluster titles
+c-TF-IDF
+c-TF-IDF or an LLM plugin
+Layer
+Default
+Why
+Language and env
+Python 3.12, uv
+Fast installs, usually no admin rights needed
+Embeddings (default)
+fastembed with BAAI/bge-small-en-v1.5
+Good matching precision on ONNX Runtime, no PyTorch
+Embeddings (ultralight)
+model2vec with minishlab/potion-base-8M
+NumPy only and the fastest on CPU; for weak machines or huge backfills
+Embeddings (quality)
+sentence-transformers with EmbeddingGemma 300M
+Best quality in the small-model tier; needs PyTorch
+Reduction
+umap-learn, about 5 dimensions, cosine
+Makes density meaningful for HDBSCAN; used inside discovery only
+Clustering
+scikit-learn HDBSCAN
+Built into scikit-learn since 1.3, no separate compile
+Labels
+scikit-learn CountVectorizer (c-TF-IDF)
+Cheap, no model needed
+CLI and service
+Typer; FastAPI for the optional HTTP endpoint
+Small, standard, typed
+Report
+Static HTML with Plotly charts
+One file, opens anywhere, no server
+Install extras keep the default small: toolkit (fastembed), toolkit[light] (model2vec), toolkit[torch], toolkit[postgres], toolkit[service], toolkit[llm] and toolkit[demo].
+Configuration
+One YAML file sets every parameter, and CLI flags or environment variables override it. Similarity numbers depend on the embedding model, so treat the defaults as starting points and set them with the tuning tool.
+Parameter
+Default
+What it controls
+embedder
+fastembed:BAAI/bge-small-en-v1.5
+Model used for every embedding
+exemplars_per_cluster
+32
+Size of each cluster's matching sample
+match_top_k
+5
+Closest exemplars averaged when scoring a match
+threshold_percentile
+5
+Percentile of member-to-exemplar similarity used as a cluster's threshold
+threshold_bounds
+0.55 to 0.90
+Floor and ceiling on any cluster's threshold
+discovery_interval
+1h
+How often discovery runs
+discovery_min_buffer
+200
+Buffer size that triggers discovery early
+min_cluster_size
+10 (demo: 5)
+Smallest group HDBSCAN turns into a cluster
+min_samples
+5
+How conservative HDBSCAN is about noise
+umap_components / umap_neighbors
+5 / 15
+Shape of the reduction inside discovery
+close_after
+7d
+Quiet period before an open cluster closes
+keep_open_min_items
+1
+Items needed within close_after to stay open; raise it so stray matches can't keep a cluster alive
+reopen_grace
+2 x close_after
+How long a closed cluster can still be reopened
+merge_threshold
+0.85
+Exemplar similarity at which two open clusters merge
+buffer_max_age
+7d
+Age at which a buffered item becomes an orphan
+random_seed
+42
+Makes discovery reproducible (UMAP runs single-threaded when set)
+Non-functional requirements
+The hard constraint is the laptop: the default install must run on a locked-down, CPU-only work machine. The targets below are design goals to verify in Milestone 4, not measured benchmarks.
+Area
+Target
+Hardware
+CPU-only laptop with 8 GB RAM; no GPU, no admin rights
+Footprint
+No PyTorch in the default install; under 1 GB on disk including the default model
+Assignment latency
+p95 under 50 ms per item, embedding included, against 1,000 open clusters
+Discovery
+A 20,000-item buffer clusters in under 2 minutes on a laptop CPU
+Demo
+Sample replay plus report in under 5 minutes, from three commands
+Privacy
+In demo mode no data leaves the machine; outbound calls only for model downloads or a configured LLM
+Reproducibility
+Same data, config and seed produce the same clusters and event log
+Reliability
+Ingestion is idempotent; discovery and sweep are safe to rerun; a failed discovery run leaves the buffer untouched
+Concurrency
+One discovery run at a time behind a lock; assignment keeps running during discovery
+Observability
+Structured logs, plus counters for items assigned, buffered and orphaned, and clusters by status
+Portability
+macOS, Linux and Windows; Python 3.11 or later
+Scaling path
+Discovery cost is bounded by the buffer, not the history, so growth mostly lands on embedding throughput and exemplar search. Each limit has a fix that swaps an adapter or a setting, never the engine.
+As this grows
+The limit becomes
+The fix
+Item volume
+Embedding throughput and concurrent writes
+Postgres store; batched embedding workers; the ultralight model for backfills
+Open clusters (thousands)
+Exemplar search on every item
+pgvector HNSW index; cap exemplars per cluster
+Buffer size (100k+ items)
+UMAP time and memory during discovery
+Fit on a sample of the buffer, then match the rest to the new clusters; cuML on a GPU
+Separate streams or tenants
+Clusters bleeding across sources
+Partition by a stream key; each partition gets its own clusters and buffer
+Model quality
+Precision of matches
+Move up to EmbeddingGemma via toolkit[torch] and re-embed with the migration command
+Success metrics and evaluation
+Quality is measured by replaying labeled data through the same engine, so every metric can be computed in demo mode. Targets get set after the first baseline run on representative data.
+Metric
+What it measures
+Assignment precision
+Share of assigned items whose cluster's majority true topic matches their own
+False merge rate
+Share of clusters that mix two or more true topics
+Fragmentation
+Clusters per true topic; 1.0 is ideal
+Time to detect
+Event time from a topic's first item to its cluster opening
+Orphan rate
+Share of items that never join a cluster
+Close lag
+Time from a topic's real last item to its cluster closing, compared with close_after
+Throughput and latency
+Items per second, and p95 assignment latency
+The evaluation harness ships with the toolkit. toolkit eval replays a labeled file and prints these metrics. toolkit tune sweeps thresholds and HDBSCAN settings over the same file and shows the trade-off between false merges and fragmentation, which is the main dial.
+Milestones
+Five milestones, each closed by an exit check. Milestones 1 to 3 deliver a working demo; 4 and 5 make it production-ready.
+1. Core engine. Embedder interface, assignment and discovery on an in-memory store, unit tests.
+    ◦ Exit: running assignment and discovery twice on a fixed dataset gives the same cluster IDs.
+2. Lifecycle and storage. Clock interface, sweep, reopen, merge, SQLite store, CLI.
+    ◦ Exit: replaying the same dataset twice yields an identical event log.
+3. Demo mode. Sample dataset, replay runner, terminal event log, HTML report.
+    ◦ Exit: a fresh laptop goes from install to report in three commands.
+4. Evaluation. Labeled replay, metrics, tuning tool, performance checks against the non-functional targets.
+    ◦ Exit: baseline metrics and targets recorded for the default model.
+5. Production adapters. Postgres and pgvector, worker scheduling, webhooks, HTTP endpoint, operator overrides, LLM labeler plugin.
+    ◦ Exit: the same replay produces matching results on SQLite and Postgres.
+Risks and mitigations
+The biggest risk is threshold calibration, because it decides both false merges and fragmentation.
+Risk
+Mitigation
+Thresholds set wrong, so unrelated items merge or one topic splits into many clusters
+Per-cluster thresholds with global bounds; the tuning tool; the merge check
+Stray matches keep a cluster open long after its topic ended
+keep_open_min_items activity floor; close lag tracked as a metric
+A topic's wording drifts over time, so new items stop matching
+Exemplar refresh by reservoir sampling; merge and split overrides
+Changing the embedding model invalidates every cluster
+Model ID pinned on every vector; migration command re-embeds exemplars
+New topics surface late because the buffer is too small for HDBSCAN
+Size-based discovery trigger; lower min_cluster_size; time to detect tracked
+UMAP gives different results between runs
+Seeded runs; cluster state lives in raw embedding space, so variance only touches discovery
+Locked-down machines block package or model downloads
+Local model paths; an offline bundle of wheels and models
+Items contain sensitive text
+Preprocessing hook for redaction; local-only demo; no LLM by default
+Open questions
+[ ] What's the real name for the toolkit and package?
+[ ] Should a match to a recently closed cluster reopen it, or always start a new cluster? This draft assumes reopen within 2 x close_after.
+[ ] Should close_after scale with a cluster's size or arrival rate, so busy clusters wait longer before closing?
+[ ] Is multilingual input in scope for v1? It changes the default model.
+[ ] Do operators need split as well as merge in v1?
+[ ] Which labeled dataset sets the baseline targets in Milestone 4?
+[ ] Should production webhooks guarantee at-least-once delivery, or is best effort enough?
